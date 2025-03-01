@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+venv312/
+pretrained_models/
+unknown_speakers/
+voice_logs.db
+*.m4a
+*.mp3
+*.wav
