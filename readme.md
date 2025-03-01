@@ -9,6 +9,11 @@ Live listen
 python app.py log-words
 ```
 
+Review unknown recordings
+```sh
+python app.py review
+```
+
 Access db
 ```sh
 sqlite3 voice_logs.db
@@ -19,3 +24,5 @@ Clear all data (dangerous!)
 chmod +x reset.sh
 ./reset.sh
 ```
+
+brew install sox

@@ -8,7 +8,7 @@ import librosa
 import sounddevice as sd
 import whisper
 import wave
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 from speechbrain.inference import SpeakerRecognition
 from pydub import AudioSegment
@@ -194,8 +194,6 @@ class VoiceLogger:
         Basic conversation detection - assumes person is talking to the 
         last identified different speaker
         """
-        # This is a simplified approach - in a real system, you'd use
-        # more sophisticated NLP and contextual awareness
         return None  # Placeholder for the listener
     
     def save_unknown_fragment(self, audio_chunk, transcription):
@@ -298,7 +296,7 @@ class VoiceLogger:
                                             # Calculate word timestamp
                                             word_time_offset = segment_start + (i / max(1, word_count-1)) * (segment_end - segment_start)
                                             word_timestamp = (stream_start_time + 
-                                                           datetime.timedelta(seconds=word_time_offset))
+                                                           timedelta(seconds=word_time_offset))
                                             
                                             # Format timestamp with millisecond precision
                                             timestamp_str = word_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
@@ -315,7 +313,7 @@ class VoiceLogger:
                                         # Calculate approximate timestamp for each word
                                         word_time_offset = chunk_offset + (i / max(1, len(words)-1)) * self.buffer_duration
                                         word_timestamp = (stream_start_time + 
-                                                        datetime.timedelta(seconds=word_time_offset))
+                                                        timedelta(seconds=word_time_offset))
                                         timestamp_str = word_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
                                         # Use a default confidence of 1.0 if not available
                                         self.log_word_to_database(speaker, word.lower(), timestamp_str, listener, 1.0)
@@ -334,14 +332,20 @@ class VoiceLogger:
         except KeyboardInterrupt:
             print("\nStopping voice logging.")
     
-    def log_word_to_database(self, speaker, word, timestamp, listener=None, confidence=1.0):
+    def log_word_to_database(self, speaker, word, timestamp, listener=None, confidence=1.0, conn=None):
         """Log a single word with timestamp and confidence to the database"""
-        conn = sqlite3.connect(self.db_path)
+        close_conn = False
+        if conn is None:
+            conn = sqlite3.connect(self.db_path)
+            close_conn = True
+            
         cursor = conn.cursor()
         
         # Clean the word (remove punctuation)
         word = re.sub(r'[^\w\s]', '', word).strip()
         if not word:  # Skip empty strings
+            if close_conn:
+                conn.close()
             return
         
         # Get speaker ID
@@ -378,76 +382,59 @@ class VoiceLogger:
                 """, (speaker_id, listener_id, word, timestamp))
         
         conn.commit()
-        conn.close()
+        if close_conn:
+            conn.close()
     
     def review_unknown_fragments(self):
         """Review and label unknown speech fragments"""
+        # Use a single connection throughout the method
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Get list of unlabeled fragments
-        cursor.execute("SELECT id, filename, transcription, timestamp FROM unknown_fragments WHERE is_labeled = 0")
-        fragments = cursor.fetchall()
-        
-        if not fragments:
-            print("No unlabeled fragments found.")
-            conn.close()
-            return
-        
-        print(f"Found {len(fragments)} unlabeled fragments. Ready to review.")
-        
-        # Get list of speakers
-        speaker_names = list(self.speakers.keys())
-        for i, name in enumerate(speaker_names, 1):
-            print(f"{i}. {name}")
-        
-        for frag_id, filename, transcription, timestamp in fragments:
-            filepath = os.path.join(self.unknown_dir, filename)
-            if not os.path.exists(filepath):
-                print(f"Warning: File {filepath} not found, skipping.")
-                continue
+        try:
+            # Get list of unlabeled fragments
+            cursor.execute("SELECT id, filename, transcription, timestamp FROM unknown_fragments WHERE is_labeled = 0")
+            fragments = cursor.fetchall()
             
-            print(f"\nPlaying fragment: {filename}")
-            print(f"Timestamp: {timestamp}")
-            print(f"Transcription: {transcription}")
+            if not fragments:
+                print("No unlabeled fragments found.")
+                return
             
-            # Play the audio (this relies on system audio player)
-            os.system(f"play {filepath}" if os.name != 'nt' else f"start {filepath}")
+            print(f"Found {len(fragments)} unlabeled fragments. Ready to review.")
             
-            # Ask for speaker identification
-            while True:
-                choice = input(f"Who is speaking? (1-{len(speaker_names)}, 'n' for new speaker, 's' to skip): ")
+            # Get list of speakers
+            speaker_names = list(self.speakers.keys())
+            for i, name in enumerate(speaker_names, 1):
+                print(f"{i}. {name}")
+            
+            for frag_id, filename, transcription, timestamp in fragments:
+                filepath = os.path.join(self.unknown_dir, filename)
+                if not os.path.exists(filepath):
+                    print(f"Warning: File {filepath} not found, skipping.")
+                    continue
                 
-                if choice.lower() == 's':
-                    break
+                print(f"\nPlaying fragment: {filename}")
+                print(f"Timestamp: {timestamp}")
+                print(f"Transcription: {transcription}")
+                
+                # Play the audio (this relies on system audio player)
+                os.system(f"play {filepath}" if os.name != 'nt' else f"start {filepath}")
+                
+                # Ask for speaker identification
+                while True:
+                    choice = input(f"Who is speaking? (1-{len(speaker_names)}, 'n' for new speaker, 's' to skip): ")
                     
-                if choice.lower() == 'n':
-                    # Add new speaker
-                    name = input("Enter name for new speaker: ")
-                    self.add_person(filepath, name)
-                    speaker_id = cursor.execute("SELECT id FROM speakers WHERE name = ?", (name,)).fetchone()[0]
-                    
-                    # Update fragment
-                    cursor.execute("""
-                        UPDATE unknown_fragments 
-                        SET is_labeled = 1, assigned_speaker_id = ? 
-                        WHERE id = ?
-                    """, (speaker_id, frag_id))
-                    
-                    # Also log the words with original timestamps
-                    words = transcription.split()
-                    for i, word in enumerate(words):
-                        # Calculate a slightly offset timestamp for each word to preserve ordering
-                        word_timestamp = (datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f") + 
-                                         datetime.timedelta(milliseconds=i*100)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                        self.log_word_to_database(name, word.lower(), word_timestamp)
-                    
-                    break
-                    
-                try:
-                    idx = int(choice) - 1
-                    if 0 <= idx < len(speaker_names):
-                        name = speaker_names[idx]
+                    if choice.lower() == 's':
+                        break
+                        
+                    if choice.lower() == 'n':
+                        # Add new speaker - need to close our current connection since add_person will create its own
+                        conn.close()
+                        name = input("Enter name for new speaker: ")
+                        self.add_person(filepath, name)
+                        # Reopen our connection
+                        conn = sqlite3.connect(self.db_path)
+                        cursor = conn.cursor()
                         speaker_id = cursor.execute("SELECT id FROM speakers WHERE name = ?", (name,)).fetchone()[0]
                         
                         # Update fragment
@@ -457,43 +444,68 @@ class VoiceLogger:
                             WHERE id = ?
                         """, (speaker_id, frag_id))
                         
-                        # Also log the words with original timestamps
+                        # Also log the words with original timestamps - using our connection
                         words = transcription.split()
                         for i, word in enumerate(words):
-                            # Calculate a slightly offset timestamp for each word to preserve ordering
                             word_timestamp = (datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f") + 
-                                             datetime.timedelta(milliseconds=i*100)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                            self.log_word_to_database(name, word.lower(), word_timestamp)
+                                            timedelta(milliseconds=i*100)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                            self.log_word_to_database(name, word.lower(), word_timestamp, conn=conn)
                         
-                        # Update the speaker model with this new sample
-                        print(f"Updating speaker model for {name} with this sample...")
-                        audio, _ = librosa.load(filepath, sr=self.sample_rate, mono=True)
-                        
-                        # We could do a more sophisticated model update here, but for now
-                        # we'll just add this as additional training data by averaging embeddings
-                        new_embedding = self.speaker_recognizer.encode_batch(
-                            torch.tensor(audio).unsqueeze(0)
-                        ).squeeze().cpu().detach().numpy()
-                        
-                        # Simple averaging of embeddings (could be improved)
-                        updated_embedding = (self.speakers[name] + new_embedding) / 2
-                        self.speakers[name] = updated_embedding
-                        
-                        # Save updated embedding
-                        cursor.execute("""
-                            UPDATE speakers SET embedding = ? WHERE name = ?
-                        """, (updated_embedding.tobytes(), name))
-                        
-                        print(f"Updated speaker model for {name}")
+                        conn.commit()
                         break
-                    else:
-                        print("Invalid selection.")
-                except ValueError:
-                    print("Invalid input. Please enter a number or 's' to skip.")
-        
-        conn.commit()
-        conn.close()
-        print("Review completed.")
+                        
+                    try:
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(speaker_names):
+                            name = speaker_names[idx]
+                            speaker_id = cursor.execute("SELECT id FROM speakers WHERE name = ?", (name,)).fetchone()[0]
+                            
+                            # Update fragment
+                            cursor.execute("""
+                                UPDATE unknown_fragments 
+                                SET is_labeled = 1, assigned_speaker_id = ? 
+                                WHERE id = ?
+                            """, (speaker_id, frag_id))
+                            
+                            # Also log the words with original timestamps - using our connection
+                            words = transcription.split()
+                            for i, word in enumerate(words):
+                                word_timestamp = (datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S.%f") + 
+                                                timedelta(milliseconds=i*100)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                                self.log_word_to_database(name, word.lower(), word_timestamp, conn=conn)
+                            
+                            # Update the speaker model with this new sample
+                            print(f"Updating speaker model for {name} with this sample...")
+                            audio, _ = librosa.load(filepath, sr=self.sample_rate, mono=True)
+                            
+                            # We could do a more sophisticated model update here, but for now
+                            # we'll just add this as additional training data by averaging embeddings
+                            new_embedding = self.speaker_recognizer.encode_batch(
+                                torch.tensor(audio).unsqueeze(0)
+                            ).squeeze().cpu().detach().numpy()
+                            
+                            # Simple averaging of embeddings (could be improved)
+                            updated_embedding = (self.speakers[name] + new_embedding) / 2
+                            self.speakers[name] = updated_embedding
+                            
+                            # Save updated embedding
+                            cursor.execute("""
+                                UPDATE speakers SET embedding = ? WHERE name = ?
+                            """, (updated_embedding.tobytes(), name))
+                            
+                            conn.commit()
+                            print(f"Updated speaker model for {name}")
+                            break
+                        else:
+                            print("Invalid selection.")
+                    except ValueError:
+                        print("Invalid input. Please enter a number or 's' to skip.")
+            
+        finally:
+            # Make sure to close the connection no matter what
+            conn.commit()
+            conn.close()
+            print("Review completed.")
 
 def main():
     parser = argparse.ArgumentParser(description="Voice Logger - Real-time speech recognition with speaker identification")
