@@ -1,7 +1,7 @@
 ## Usage
 Add person
 ```sh
-python app.py add-person /Users/matt/GitHub/speak-logger/RobertSpeaking.m4a "Robert Vandenberg"
+python app.py add-person /Users/matt/GitHub/speak-logger/Matthew.mp3 "Matthew"
 ```
 
 Live listen

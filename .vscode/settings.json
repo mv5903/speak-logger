@@ -1,0 +1,13 @@
+{
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticSeverityOverrides": {
+      "reportUndefinedVariable": "error",
+      "reportUnboundVariable": "error",
+      "reportUndefinedFunction": "error",
+      "reportUnusedVariable": "warning",
+      "reportUnusedFunction": "warning",
+      "reportUnusedImport": "warning",
+      "reportRedundantCast": "warning",
+      "reportGeneralTypeIssues": "warning"
+    }
+  }

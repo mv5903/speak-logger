@@ -136,7 +136,7 @@ class VoiceLogger:
             audio, _ = librosa.load(audio_file, sr=self.sample_rate, mono=True)
             
             # Extract speaker embedding
-            embedding = self.speaker_recognizer.encode_batch(torch.tensor(audio).unsqueeze(0))
+            embedding = self.speaker_recognizer.encode_batch(torch.tensor(audio).unsqueeze(0)) # type: ignore
             embedding_np = embedding.squeeze().cpu().detach().numpy()
             
             # Save to database
@@ -166,7 +166,7 @@ class VoiceLogger:
             
         # Convert audio to tensor and extract embedding
         audio_tensor = torch.tensor(audio_segment).unsqueeze(0)
-        embedding = self.speaker_recognizer.encode_batch(audio_tensor)
+        embedding = self.speaker_recognizer.encode_batch(audio_tensor) # type: ignore
         current_embedding = embedding.squeeze().cpu().detach().numpy()
         
         # Compare with known speakers
@@ -239,7 +239,6 @@ class VoiceLogger:
             last_speaker = None
             buffer = []
             stream_start_time = datetime.now()
-            last_chunk_time = stream_start_time
             
             def audio_callback(indata, frames, time, status):
                 """Callback for audio streaming"""
@@ -263,7 +262,7 @@ class VoiceLogger:
                         
                         # Transcribe speech with detailed segment info to get confidence scores
                         result = self.speech_recognizer.transcribe(audio_chunk.astype(np.float32))
-                        text = result["text"].strip()
+                        text = result["text"].strip() # type: ignore
                         
                         if text:  # Only process if there's actual speech
                             # Identify speaker
@@ -278,6 +277,11 @@ class VoiceLogger:
                                 # Process each segment with its confidence score
                                 if 'segments' in result:
                                     for segment in result['segments']:
+                                        # Make sure segment is a dictionary
+                                        if not isinstance(segment, dict):
+                                            print(f"  Skipping invalid segment: {segment}")
+                                            continue
+                                        
                                         # Check if segment meets confidence threshold
                                         segment_confidence = segment.get('confidence', 0)
                                         if segment_confidence < self.speech_confidence_threshold:
@@ -323,9 +327,7 @@ class VoiceLogger:
                                 print(f"[Unknown Speaker ({confidence:.2f})]: {text}")
                                 # Save fragment for manual review
                                 self.save_unknown_fragment(audio_chunk, text)
-                        
-                        # Update last chunk time
-                        last_chunk_time = chunk_start_time
+    
                         
                     time.sleep(0.1)  # Small delay to prevent CPU hogging
                         
@@ -480,7 +482,7 @@ class VoiceLogger:
                             
                             # We could do a more sophisticated model update here, but for now
                             # we'll just add this as additional training data by averaging embeddings
-                            new_embedding = self.speaker_recognizer.encode_batch(
+                            new_embedding = self.speaker_recognizer.encode_batch( # type: ignore
                                 torch.tensor(audio).unsqueeze(0)
                             ).squeeze().cpu().detach().numpy()
                             
@@ -518,10 +520,10 @@ def main():
     add_parser.add_argument("name", help="Name to associate with the voice")
     
     # Log words command
-    log_parser = subparsers.add_parser("log-words", help="Start logging spoken words")
+    subparsers.add_parser("log-words", help="Start logging spoken words")
     
     # Review fragments command
-    review_parser = subparsers.add_parser("review", help="Review and label unknown speech fragments")
+    subparsers.add_parser("review", help="Review and label unknown speech fragments")
     
     args = parser.parse_args()
     
