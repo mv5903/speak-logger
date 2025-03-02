@@ -426,7 +426,7 @@ class VoiceLogger:
                         except Exception as e:
                             print(COLOR_ERROR + f"Error during speech processing: {e}")
                         
-                    time.sleep(0.1)  # Small delay to prevent CPU hogging
+                    time.sleep(0.01)  # Small delay to prevent CPU hogging
                         
         except KeyboardInterrupt:
             print(COLOR_INFO + "\nStopping voice logging.")
@@ -520,7 +520,8 @@ class VoiceLogger:
                 
                 # Play the audio (this relies on system audio player)
                 if os.name == 'nt':  # Windows
-                    os.system(f"start {filepath}")
+                    import winsound
+                    winsound.PlaySound(filepath, winsound.SND_FILENAME)
                 else:  # Linux/Mac
                     os.system(f"play {filepath}")
                 
