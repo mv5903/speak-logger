@@ -19,42 +19,39 @@ coming soon
 
 
 ## Usage
+When adding a person for the first time, use the longest clip you have possible. You can use shorter ones, but you may need more manual reviewing for the first couple runs until you notice a confidence increase.
 
-Add person
+### Add person
 ```sh
 python app.py add-person ./Matthew.mp3 "Matthew"
 ```
 
-Live listen
+### Live listen
 ```sh
 python app.py log-words
 ```
 
-Review unknown recordings
+### Review unknown recordings
 ```sh
 python app.py review
 ```
 
-Access db
+### Access db
 ```sh
 sqlite3 voice_logs.db
 ```
-
-Clear all data (dangerous!)
-```sh
-chmod +x reset.sh
-./reset.sh
-```
+You can also install a vscode extension to view the database file. 
 
 
-### Mac Extras
+
+## Mac Necessities
 ```sh
 # for audio playback in review mode
 brew install sox 
 ```
 
 
-### Windows Neccessities
+### Windows Necessities
 ```sh
 # pytorch with cuda support
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 
