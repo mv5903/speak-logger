@@ -1,7 +1,7 @@
 ## Usage
 Add person
 ```sh
-python app.py add-person /Users/matt/GitHub/speak-logger/Matthew.mp3 "Matthew"
+python app.py add-person ./Matthew.mp3 "Matthew"
 ```
 
 Live listen
@@ -25,4 +25,10 @@ chmod +x reset.sh
 ./reset.sh
 ```
 
-brew install sox
+
+### Mac Extras
+brew install sox (for audio playback in review mode)
+
+
+### Windows Extras
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 (pytorch with cuda support)
