@@ -12,19 +12,30 @@ path/to/python3.12 -m venv venv\
 
 # Install requirements (this may take several minutes)
 pip install -r requirements-win.txt
+
+# pytorch with cuda support - required to utilize your gpu
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 
+
+# ffmpeg for windows - make sure to restart your terminal and reactivate the virtual environment
+winget install "FFmpeg (Essentials Build)" 
 ```
 
 ### Mac/Linux
 coming soon
+```sh
+# for audio playback in review mode
+brew install sox 
+```
 
 
 ## Usage
-When adding a person for the first time, use the longest clip you have possible. You can use shorter ones, but you may need more manual reviewing for the first couple runs until you notice a confidence increase.
 
 ### Add person
 ```sh
 python app.py add-person ./Matthew.mp3 "Matthew"
 ```
+File types `.wav`, `.mp3`, and `.m4a` are supported. <br>
+When adding a person for the first time, use the longest clip you have possible. You can use shorter ones, but you may need more manual reviewing for the first couple runs until you notice a confidence increase.
 
 ### Live listen
 ```sh
@@ -41,21 +52,3 @@ python app.py review
 sqlite3 voice_logs.db
 ```
 You can also install a vscode extension to view the database file. 
-
-
-
-## Mac Necessities
-```sh
-# for audio playback in review mode
-brew install sox 
-```
-
-
-### Windows Necessities
-```sh
-# pytorch with cuda support
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118 
-
-# ffmpeg for windows (make sure to restart your terminal)
-winget install "FFmpeg (Essentials Build)" 
-```
