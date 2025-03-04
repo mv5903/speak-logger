@@ -624,6 +624,11 @@ class VoiceLogger:
             for clip in clips_assigned_to_speakers:
                 os.unlink(clip)
 
+            # If no more fragments are left, remove the unknown directory
+            if not os.listdir(self.unknown_dir):
+                os.rmdir(self.unknown_dir)
+                print(COLOR_INFO + "No more fragments found, removed empty unknown fragments directory.")
+
 
     def update_speaker_profile(self, name, audio_files):
         """Update speaker profile with multiple audio samples for better recognition"""
