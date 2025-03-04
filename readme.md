@@ -47,6 +47,25 @@ python app.py log-words
 python app.py review
 ```
 
+### Update a person's speech model manually with additional recordings
+```sh
+python app.py update-profile "Name"
+```
+
+### Reset a profile
+```sh
+python app.py reset-profile "Name"
+```
+
+### Reset the entire database (probably *not* a good idea unless you're testing)
+```sh
+# Windows
+./reset.ps1
+
+# Linux/Mac
+./reset.sh
+```
+
 ### Access db
 ```sh
 sqlite3 voice_logs.db

@@ -177,3 +177,4 @@ voice_logs.db
 *.m4a
 *.mp3
 *.wav
+config.json
