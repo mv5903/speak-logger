@@ -25,17 +25,25 @@ COLOR_TRANSCRIPTIONS = Fore.MAGENTA
 COLOR_QUESTION = Fore.BLUE
 
 class VoiceLogger:
-    def __init__(self, db_path="voice_logs.db", unknown_dir="unknown_speakers", config_path="config.json"):
+    def __init__(self, config_path="config.json"):
         # Config settings
         self.config_path = config_path
         self.config = self.load_config()
         
+        # Extract configuration values with defaults
+        audio_config = self.config.get("audio", {})
+        threshold_config = self.config.get("thresholds", {})
+        paths_config = self.config.get("paths", {})
+        models_config = self.config.get("models", {})
+        
+        # Initialize paths from config
+        self.db_path = paths_config.get("db_path", "voice_logs.db")
+        self.unknown_dir = paths_config.get("unknown_dir", "unknown_speakers")
+        
         # Initialize database
-        self.db_path = db_path
         self.setup_database()
         
         # Create directory for unknown speaker fragments
-        self.unknown_dir = unknown_dir
         os.makedirs(self.unknown_dir, exist_ok=True)
         
         # Check for GPU availability
@@ -47,14 +55,18 @@ class VoiceLogger:
             print(COLOR_INFO + f"Using device: {self.device} - {torch.cuda.get_device_name(0) if self.device.type == 'cuda' else 'CPU'}")
         
         # Initialize models with GPU support if available
+        whisper_config = models_config.get("whisper", {})
+        speaker_config = models_config.get("speaker_embedding", {})
+        
         print(COLOR_INFO + "Loading Whisper model...")
-        self.speech_recognizer = whisper.load_model("medium", device=self.device)
-        print(COLOR_INFO + "Whisper model loaded.")
+        model_name = whisper_config.get("model_name", "medium")
+        self.speech_recognizer = whisper.load_model(model_name, device=self.device)
+        print(COLOR_INFO + f"Whisper model '{model_name}' loaded.")
         
         print(COLOR_INFO + "Loading Pyannote speaker embedding model...")
-        # Use the newer model that works better for speaker identification
+        model_path = speaker_config.get("model_path", "speechbrain/spkrec-ecapa-voxceleb")
         self.speaker_embedding = PretrainedSpeakerEmbedding(
-            "speechbrain/spkrec-ecapa-voxceleb",
+            model_path,
             device=self.device
         )
         print(COLOR_INFO + "Pyannote speaker embedding model loaded.")
@@ -63,11 +75,19 @@ class VoiceLogger:
         self.speakers = {}
         self.load_speakers()
         
-        # Audio settings
-        self.sample_rate = 16000
-        self.buffer_duration = 5  # seconds
-        self.confidence_threshold = 0.65 
-        self.speech_confidence_threshold = 0.6  # Minimum confidence for speech recognition
+        # Audio settings from config
+        self.sample_rate = audio_config.get("sample_rate", 16000)
+        self.buffer_duration = audio_config.get("buffer_duration", 5)  
+        self.min_audio_length = audio_config.get("min_audio_length", 2)
+        self.overlap_seconds = audio_config.get("overlap_seconds", 0.5)
+        
+        # Threshold settings from config
+        self.confidence_threshold = threshold_config.get("speaker_confidence", 0.65)
+        self.speech_confidence_threshold = threshold_config.get("speech_confidence", 0.6)
+        self.silence_rms_threshold = threshold_config.get("silence_rms", 0.005)
+        
+        # Processing settings
+        self.processing_config = self.config.get("processing", {})
         
     def setup_database(self):
         """Set up SQLite database for storing word frequencies and conversations"""
@@ -152,7 +172,7 @@ class VoiceLogger:
         # Check if file is m4a or mp3 format and convert if needed
         temp_file = None
         try:
-            if audio_file.lower().endswith(('.m4a', '.mp3')):
+            if (audio_file.lower().endswith(('.m4a', '.mp3'))):
                 format_type = 'm4a' if audio_file.lower().endswith('.m4a') else 'mp3'
                 print(COLOR_WARNING + f"Converting {format_type} file to WAV format...")
                 temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
@@ -168,12 +188,12 @@ class VoiceLogger:
             # Load audio file
             audio, _ = librosa.load(audio_file, sr=self.sample_rate, mono=True)
             
-            # Ensure enough audio data (at least 2 seconds)
-            if len(audio) < 2 * self.sample_rate:
+            # Ensure enough audio data (using min_audio_length from config)
+            if len(audio) < self.min_audio_length * self.sample_rate:
                 print(COLOR_WARNING + "Warning: Audio sample is too short. Repeating to create longer sample.")
                 # Repeat the audio to make it longer
-                repeats = max(1, int(2 * self.sample_rate / len(audio)) + 1)
-                audio = np.tile(audio, repeats)[:2 * self.sample_rate]
+                repeats = max(1, int(self.min_audio_length * self.sample_rate / len(audio)) + 1)
+                audio = np.tile(audio, repeats)[:self.min_audio_length * self.sample_rate]
             
             # Extract speaker embedding (using Pyannote model)
             with torch.no_grad():
@@ -286,7 +306,7 @@ class VoiceLogger:
         conn.commit()
         conn.close()
         
-        print(COLOR_INFO + f"Saved unknown fragment to {filepath}")
+        #print(COLOR_INFO + f"Saved unknown fragment to {filepath}")
         return filename
     
     def log_words(self):
@@ -310,12 +330,16 @@ class VoiceLogger:
         else:
             print(COLOR_WARNING + "Using default system microphone. If you feel the wrong microphone is selected, use 'select-mic' command.")
         
-        print(COLOR_SUCCESS + "Listening...")
+        print(COLOR_SUCCESS + "Listening (Ctrl + C to stop)...")
 
         try:
             last_speaker = None
             buffer = []
+            previous_chunk_end = np.array([])  # Initialize as empty NumPy array
+            overlap_size = int(self.sample_rate * self.overlap_seconds)
             stream_start_time = datetime.now()
+            silence_counter = 0
+            max_silence_count = self.processing_config.get("max_silence_count", 3)
             
             def audio_callback(indata, frames, time, status):
                 """Callback for audio streaming"""
@@ -327,9 +351,20 @@ class VoiceLogger:
             with sd.InputStream(callback=audio_callback, device=mic_device, channels=1, samplerate=self.sample_rate):
                 while True:
                     # Process in chunks
-                    if len(buffer) >= self.sample_rate * self.buffer_duration:
-                        audio_chunk = np.array(buffer[:self.sample_rate * self.buffer_duration])
-                        buffer = buffer[self.sample_rate * self.buffer_duration:]
+                    chunk_size = self.sample_rate * self.buffer_duration
+                    if len(buffer) >= chunk_size:
+                        # Keep the last part of the previous chunk for overlap
+                        if previous_chunk_end.size > 0:  # Fixed: Check array size properly
+                            # Combine previous chunk end with new data for smooth transition
+                            audio_chunk = np.concatenate([previous_chunk_end, buffer[:chunk_size]])
+                            # Use the overlap size for processing but advance the buffer by original chunk size
+                            buffer = buffer[chunk_size:]
+                        else:
+                            audio_chunk = np.array(buffer[:chunk_size])
+                            buffer = buffer[chunk_size:]
+                        
+                        # Save the end of current chunk for next iteration
+                        previous_chunk_end = audio_chunk[-overlap_size:].copy()
                         
                         # Get current time at the beginning of processing this chunk
                         chunk_start_time = datetime.now()
@@ -337,24 +372,43 @@ class VoiceLogger:
                         # Calculate chunk offset from stream start (for word timestamp calculation)
                         chunk_offset = (chunk_start_time - stream_start_time).total_seconds()
                         
-                        # Detect speech activity to avoid processing silence
+                        # Detect speech activity with a lower threshold for improved sensitivity
                         rms = np.sqrt(np.mean(audio_chunk**2))
-                        if rms < 0.01:  # Skip processing if audio is too quiet
+                        if rms < self.silence_rms_threshold:
+                            silence_counter += 1
+                            # Process after several silence frames to catch trailing speech
+                            if silence_counter >= max_silence_count:
+                                silence_counter = 0
+                                previous_chunk_end = np.array([])  # Reset to empty NumPy array
                             continue
+                        
+                        # Reset silence counter when speech is detected
+                        silence_counter = 0
                         
                         try:
                             # Move model inference to GPU if available
                             with torch.cuda.device(0) if torch.cuda.is_available() else torch.device("cpu"):
+                                # Get model parameters from config
+                                whisper_config = self.config.get("models", {}).get("whisper", {})
+                                language = whisper_config.get("language", "en")
+                                task = whisper_config.get("task", "transcribe")
+                                
                                 # Transcribe speech with detailed segment info to get confidence scores
-                                # Use faster options with small model for real-time performance
                                 result = self.speech_recognizer.transcribe(
                                     audio_chunk.astype(np.float32),
-                                    language="en",
-                                    task="transcribe",
+                                    language=language,
+                                    task=task,
                                     fp16=torch.cuda.is_available()
                                 )
-                                
+                            
                             text = result["text"].strip() # type: ignore
+                            
+                            # Use a lower confidence threshold for segments to catch more speech
+                            if "segments" in result:
+                                segment_confidence = 0.0
+                                for segment in result["segments"]:
+                                    if isinstance(segment, dict) and "confidence" in segment:
+                                        segment_confidence = max(segment_confidence, segment["confidence"])
                             
                             if text:  # Only process if there's actual speech
                                 # Apply repetition detection and fix
@@ -369,45 +423,7 @@ class VoiceLogger:
                                     # Identify potential listener
                                     listener = self.detect_conversation(speaker, audio_chunk) if speaker != last_speaker else None
                                     
-                                    # Process each segment with its confidence score
-                                    # if 'segments' in result:
-                                    #     print(f" Segments: ")
-                                    #     for segment in result['segments']:
-                                    #         # Make sure segment is a dictionary
-                                    #         if not isinstance(segment, dict):
-                                    #             print(f"  Skipping invalid segment: {segment}")
-                                    #             continue
-                                            
-                                    #         # Check if segment meets confidence threshold
-                                    #         segment_confidence = segment.get('confidence', 0)
-                                    #         if segment_confidence < self.speech_confidence_threshold:
-                                    #             print(f"  Skipping low confidence segment: '{segment['text']}' ({segment_confidence:.2f})")
-                                    #             continue
-                                            
-                                    #         # Process words in this segment
-                                    #         segment_text = segment['text'].strip()
-                                    #         segment_words = segment_text.split()
-                                    #         segment_start = segment.get('start', 0) + chunk_offset
-                                    #         segment_end = segment.get('end', self.buffer_duration) + chunk_offset
-                                            
-                                    #         # Calculate approximate word positions within segment
-                                    #         word_count = len(segment_words)
-                                    #         for i, word in enumerate(segment_words):
-                                    #             # Calculate word timestamp
-                                    #             word_time_offset = segment_start + (i / max(1, word_count-1)) * (segment_end - segment_start)
-                                    #             word_timestamp = (stream_start_time + 
-                                    #                            timedelta(seconds=word_time_offset))
-                                                
-                                    #             # Format timestamp with millisecond precision
-                                    #             timestamp_str = word_timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                                                
-                                    #             # Log word with confidence score
-                                    #             self.log_word_to_database(speaker, word.lower(), timestamp_str, 
-                                    #                                   listener, segment_confidence)
-                                                
-                                    #             print(f"  Word: '{word}' (Confidence: {segment_confidence:.2f})")
-                                    # else:
-                                    # Fallback for old API or if segments not available. TODO: Figure out a better way to handle
+                                    # Process words in bulk for this audio chunk
                                     words = text.split()
                                     for i, word in enumerate(words):
                                         # Calculate approximate timestamp for each word
@@ -420,7 +436,7 @@ class VoiceLogger:
                                     
                                     last_speaker = speaker
                                 else:
-                                    print(COLOR_WARNING + f"[Unknown Speaker ({confidence:.2f})]: {text}")
+                                    print(COLOR_WARNING + f"[Unknown Speaker ({confidence:.2f})]: {COLOR_TRANSCRIPTIONS} {text}")
                                     # Save fragment for manual review
                                     self.save_unknown_fragment(audio_chunk, text)
                         except Exception as e:
@@ -451,22 +467,29 @@ class VoiceLogger:
         cursor.execute("SELECT id FROM speakers WHERE name = ?", (speaker,))
         speaker_id = cursor.fetchone()[0]
         
-        # Insert word with timestamp and confidence
+        # Check if this word already exists for this speaker
         cursor.execute("""
-            INSERT INTO word_logs (speaker_id, word, timestamp, confidence)
-            VALUES (?, ?, ?, ?)
-        """, (speaker_id, word, timestamp, confidence))
+            SELECT id, frequency FROM word_logs 
+            WHERE speaker_id = ? AND word = ? 
+            ORDER BY timestamp DESC LIMIT 1
+        """, (speaker_id, word))
         
-        # Update word frequency (separate query)
-        cursor.execute("""
-            UPDATE word_logs 
-            SET frequency = (
-                SELECT COUNT(*) 
-                FROM word_logs 
-                WHERE speaker_id = ? AND word = ?
-            )
-            WHERE speaker_id = ? AND word = ? AND rowid = last_insert_rowid()
-        """, (speaker_id, word, speaker_id, word))
+        existing_word = cursor.fetchone()
+        
+        if existing_word:
+            # Word exists, update frequency
+            word_id, frequency = existing_word
+            cursor.execute("""
+                UPDATE word_logs 
+                SET frequency = ?, timestamp = ?
+                WHERE id = ?
+            """, (frequency + 1, timestamp, word_id))
+        else:
+            # Word doesn't exist, create new record
+            cursor.execute("""
+                INSERT INTO word_logs (speaker_id, word, timestamp, frequency, confidence)
+                VALUES (?, ?, ?, 1, ?)
+            """, (speaker_id, word, timestamp, confidence))
         
         # If this word is part of a conversation, log it
         if listener:
@@ -756,6 +779,37 @@ class VoiceLogger:
             "microphone": {
                 "device": None,  # Default to system default
                 "name": "Default"
+            },
+            "models": {
+                "whisper": {
+                    "model_name": "medium",
+                    "language": "en",
+                    "task": "transcribe"
+                },
+                "speaker_embedding": {
+                    "model_path": "speechbrain/spkrec-ecapa-voxceleb"
+                }
+            },
+            "audio": {
+                "sample_rate": 16000,
+                "buffer_duration": 5,
+                "min_audio_length": 2,
+                "overlap_seconds": 0.5
+            },
+            "thresholds": {
+                "speaker_confidence": 0.65,
+                "speech_confidence": 0.6,
+                "silence_rms": 0.005
+            },
+            "processing": {
+                "max_silence_count": 3,
+                "min_text_length_for_repetition": 5,
+                "min_pattern_length": 3,
+                "max_pattern_length": 10
+            },
+            "paths": {
+                "db_path": "voice_logs.db",
+                "unknown_dir": "unknown_speakers"
             }
         }
         
@@ -764,17 +818,34 @@ class VoiceLogger:
                 with open(self.config_path, 'r') as f:
                     config = json.load(f)
                 print(COLOR_INFO + f"Loaded configuration from {self.config_path}")
-                # Ensure all required keys exist by combining with defaults
-                for key in default_config:
-                    if key not in config:
-                        config[key] = default_config[key]
-                return config
+                
+                # Ensure all required keys exist by recursively merging with defaults
+                def merge_configs(default, loaded):
+                    """Recursively merge configs, keeping existing values but adding missing ones"""
+                    result = loaded.copy()
+                    for key, value in default.items():
+                        if key not in result:
+                            result[key] = value
+                        elif isinstance(value, dict) and isinstance(result[key], dict):
+                            result[key] = merge_configs(value, result[key])
+                    return result
+                
+                merged_config = merge_configs(default_config, config)
+                return merged_config
             except Exception as e:
                 print(COLOR_ERROR + f"Error loading config: {e}")
                 print(COLOR_ERROR + "Using default configuration")
                 return default_config
         else:
-            print(COLOR_WARNING + "No configuration file found. Using default settings.")
+            print(COLOR_WARNING + "No configuration file found. Creating default settings.")
+            # Save the default config
+            try:
+                with open(self.config_path, 'w') as f:
+                    json.dump(default_config, f, indent=4)
+                print(COLOR_INFO + f"Default configuration saved to {self.config_path}")
+            except Exception as e:
+                print(COLOR_ERROR + f"Error saving default config: {e}")
+                
             return default_config
 
     def save_config(self):
@@ -874,20 +945,25 @@ class VoiceLogger:
         """Detect and fix repetitive text patterns"""
         if not text:
             return text
+        
+        # Get repetition detection parameters from config
+        min_text_length = self.processing_config.get("min_text_length_for_repetition", 5) 
+        min_pattern_len = self.processing_config.get("min_pattern_length", 3)
+        max_pattern_len = self.processing_config.get("max_pattern_length", 10)
             
         # Look for simple repetition patterns
         words = text.split()
-        if len(words) < 5:  # Don't process short texts
+        if len(words) < min_text_length:  # Don't process short texts
             return text
             
-        # Check for repeating patterns of 3+ words
+        # Check for repeating patterns of min_pattern_len+ words
         cleaned_text = []
         i = 0
         while i < len(words):
             cleaned_text.append(words[i])
             
             # Look for repetition patterns starting at current word
-            for pattern_len in range(3, min(10, len(words) - i)):
+            for pattern_len in range(min_pattern_len, min(max_pattern_len, len(words) - i)):
                 pattern = words[i:i+pattern_len]
                 # Check if this pattern repeats immediately after
                 if i + pattern_len*2 <= len(words) and words[i+pattern_len:i+pattern_len*2] == pattern:
@@ -905,8 +981,10 @@ class VoiceLogger:
         
         return ' '.join(cleaned_text)
 
-def main():
+def main():    
     colorama_init(autoreset=True)
+    print(COLOR_INFO + "Initializing Voice Logger, please wait...")
+
     parser = argparse.ArgumentParser(description="Voice Logger - Real-time speech recognition with speaker identification")
     
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
@@ -937,6 +1015,9 @@ def main():
     # List microphones command
     subparsers.add_parser("list-mics", help="List all available microphones")
     
+    # Add new config-help command
+    subparsers.add_parser("config-help", help="Display configuration reference")
+    
     args = parser.parse_args()
     
     voice_logger = VoiceLogger()
@@ -958,5 +1039,6 @@ def main():
     else:
         parser.print_help()
 
+# If called directly, run main()
 if __name__ == "__main__":
     main()

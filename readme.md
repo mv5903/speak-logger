@@ -81,3 +81,6 @@ python app.py select-mic
 sqlite3 voice_logs.db
 ```
 You can also install a vscode extension to view the database file. 
+
+## Configuration Options
+Check out the [configuration options](config_reference.md) if you want to modify them.
