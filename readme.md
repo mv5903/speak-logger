@@ -57,6 +57,16 @@ python app.py update-profile "Name"
 python app.py reset-profile "Name"
 ```
 
+### List available microphones
+```sh
+python app.py list-mics
+```
+
+### Change default microphone
+```sh
+python app.py select-mic
+```
+
 ### Reset the entire database (probably *not* a good idea unless you're testing)
 ```sh
 # Windows
